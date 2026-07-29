@@ -1,0 +1,9 @@
+{
+    "telegram_bot_token": "8947564521:AAGG0veLuI_QRLYuDXXzcNXivbssQBk4WBo",
+    "telegram_chat_id": "-1004304433240",
+    "shopee_app_key": "18348260831",
+    "shopee_secret_key": "NXLFAGF5KDV2OY73ZCA3BSAQMVWMQ4YM",
+    "shopee_affiliate_id": "an_18348260831",
+    "check_interval_minutes": 15,
+    "min_discount_percent": 20
+}
