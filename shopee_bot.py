@@ -6,21 +6,30 @@ import hashlib
 import logging
 import threading
 import requests
-from flask import Flask
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# Servidor HTTP para passar no Health Check do Render Web Service
-app = Flask(__name__)
+# Handler para responder 200 OK instantaneamente ao Health Check do Render e UptimeRobot
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"OK - Shopee Bot 24/7 Active")
 
-@app.route('/')
-@app.route('/health')
-def health_check():
-    return "OK - Shopee Bot Active 24/7", 200
+    def log_message(self, format, *args):
+        return  # Desativa logs ruidosos de requisições HTTP
 
-def start_flask():
+def start_http_server():
     port = int(os.environ.get("PORT", 10000))
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)
-    app.run(host="0.0.0.0", port=port)
+    try:
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        server.serve_forever()
+    except Exception as e:
+        pass
+
+# Inicia o servidor de saúde IMEDIATAMENTE em segundo plano ao carregar o módulo
+http_thread = threading.Thread(target=start_http_server, daemon=True)
+http_thread.start()
 
 # Garante codificação UTF-8 no console
 sys.stdout.reconfigure(encoding='utf-8')
@@ -161,10 +170,6 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
     return False
 
 def main():
-    # Inicia o servidor HTTP Flask em segundo plano para o Render Web Service
-    http_thread = threading.Thread(target=start_flask, daemon=True)
-    http_thread.start()
-
     logger.info("🚀 Iniciando Robô Varredor Shopee 24/7 (Achadinhos do Oliver)...")
 
     cfg = load_config()
