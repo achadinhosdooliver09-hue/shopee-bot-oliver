@@ -4,7 +4,23 @@ import time
 import json
 import hashlib
 import logging
+import threading
 import requests
+from flask import Flask
+
+# Servidor HTTP para passar no Health Check do Render Web Service
+app = Flask(__name__)
+
+@app.route('/')
+@app.route('/health')
+def health_check():
+    return "OK - Shopee Bot Active 24/7", 200
+
+def start_flask():
+    port = int(os.environ.get("PORT", 10000))
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+    app.run(host="0.0.0.0", port=port)
 
 # Garante codificação UTF-8 no console
 sys.stdout.reconfigure(encoding='utf-8')
@@ -145,6 +161,10 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
     return False
 
 def main():
+    # Inicia o servidor HTTP Flask em segundo plano para o Render Web Service
+    http_thread = threading.Thread(target=start_flask, daemon=True)
+    http_thread.start()
+
     logger.info("🚀 Iniciando Robô Varredor Shopee 24/7 (Achadinhos do Oliver)...")
 
     cfg = load_config()
