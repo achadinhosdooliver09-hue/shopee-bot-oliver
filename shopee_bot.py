@@ -8,9 +8,11 @@ import threading
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# ─── UTF-8 no console (antes de qualquer log) ────────────────────────────────
-sys.stdout.reconfigure(encoding="utf-8")
-sys.stderr.reconfigure(encoding="utf-8")
+# ─── UTF-8 no console ────────────────────────────────────────────────────────
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -36,23 +38,17 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
 
 
 def start_http_server():
-    """Inicia o servidor HTTP de health check. Roda em thread separada (não-daemon)."""
+    """Inicia o servidor HTTP de health check na porta definida pelo Render."""
     port = int(os.environ.get("PORT", 10000))
     try:
         server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-        logger.info(f"✅ Servidor HTTP ativo na porta {port}")
+        logger.info(f"✅ Servidor HTTP de Health Check ativo na porta {port}")
         server.serve_forever()
     except OSError as e:
-        logger.error(f"❌ ERRO CRÍTICO ao iniciar servidor HTTP na porta {port}: {e}")
+        logger.error(f"❌ Erro ao iniciar servidor HTTP na porta {port}: {e}")
     except Exception as e:
-        logger.error(f"❌ Servidor HTTP encerrado inesperadamente: {e}")
+        logger.error(f"❌ Servidor HTTP encerrado: {e}")
 
-
-# Thread NÃO-daemon: mantém o processo vivo mesmo se main() terminar
-http_thread = threading.Thread(target=start_http_server, name="HTTPServer", daemon=False)
-http_thread.start()
-# Aguarda 1s para garantir que a porta está aberta antes do Render checar
-time.sleep(1)
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 CONFIG_PATH = "config.json"
@@ -76,6 +72,9 @@ class ShopeeAffiliateAPI:
         self.app_key = str(app_key).strip()
         self.secret_key = str(secret_key).strip()
         self.endpoint = "https://open-api.affiliate.shopee.com.br/graphql"
+        self.headers_base = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
 
     def _generate_signature(self, timestamp, payload):
         factor = f"{self.app_key}{timestamp}{payload}{self.secret_key}"
@@ -83,10 +82,12 @@ class ShopeeAffiliateAPI:
 
     def _headers(self, timestamp, payload):
         sig = self._generate_signature(timestamp, payload)
-        return {
+        headers = self.headers_base.copy()
+        headers.update({
             "Content-Type": "application/json",
             "Authorization": f"SHA256 Credential={self.app_key}, Timestamp={timestamp}, Signature={sig}",
-        }
+        })
+        return headers
 
     def fetch_top_offers(self, page=1, limit=10):
         if not self.app_key or not self.secret_key:
@@ -103,7 +104,7 @@ class ShopeeAffiliateAPI:
                 self.endpoint,
                 data=payload,
                 headers=self._headers(timestamp, payload),
-                timeout=20,
+                timeout=25,
             )
             if res.status_code == 200:
                 data = res.json()
@@ -180,11 +181,15 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
         "reply_markup": json.dumps(reply_markup),
     }
 
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+
     for attempt in range(1, 4):
         try:
-            res = requests.post(url, data=payload, timeout=30)
+            res = requests.post(url, data=payload, headers=headers, timeout=30)
             if res.status_code == 200:
-                logger.info(f"✅ Publicado: {title[:40]} | {affiliate_link}")
+                logger.info(f"✅ Publicado com sucesso no Telegram: {title[:40]} | {affiliate_link}")
                 return True
             else:
                 resp_json = res.json()
@@ -192,9 +197,8 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
                     f"Telegram erro (tentativa {attempt}): "
                     f"code={res.status_code} desc={resp_json.get('description', res.text[:200])}"
                 )
-                # Se for erro de chat inválido, não tenta de novo
                 if resp_json.get("error_code") in (400, 403):
-                    logger.error("❌ Erro permanente Telegram — abortando tentativas")
+                    logger.error("❌ Erro permanente Telegram (chat_id ou bot inválido) — abortando tentativas")
                     break
         except requests.exceptions.Timeout:
             logger.error(f"Telegram: timeout (tentativa {attempt})")
@@ -209,23 +213,28 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
 def main():
     logger.info("🚀 Iniciando Robô Varredor Shopee 24/7 — Achadinhos do Oliver")
 
-    cfg = load_config()
-    bot_token = cfg.get("telegram_bot_token") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id   = cfg.get("telegram_chat_id")   or os.environ.get("TELEGRAM_CHAT_ID", "")
-    app_key   = cfg.get("shopee_app_key")     or os.environ.get("SHOPEE_APP_KEY", "")
-    secret    = cfg.get("shopee_secret_key")  or os.environ.get("SHOPEE_SECRET_KEY", "")
-    interval  = int(cfg.get("check_interval_minutes", 15)) * 60
+    # Inicia o servidor HTTP em background (daemon thread para nao travar encerramento)
+    http_thread = threading.Thread(target=start_http_server, name="HTTPServer", daemon=True)
+    http_thread.start()
 
-    # Log das configs (sem expor segredos)
-    logger.info(f"📋 Config: chat_id={chat_id} | app_key={app_key[:6]}... | interval={interval//60}min")
+    cfg = load_config()
+
+    # Prioridade: Variaveis de ambiente do Render -> Fallback para config.json
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN") or cfg.get("telegram_bot_token", "")
+    chat_id   = os.environ.get("TELEGRAM_CHAT_ID") or cfg.get("telegram_chat_id", "")
+    app_key   = os.environ.get("SHOPEE_APP_KEY") or cfg.get("shopee_app_key", "")
+    secret    = os.environ.get("SHOPEE_SECRET_KEY") or cfg.get("shopee_secret_key", "")
+    interval  = int(os.environ.get("CHECK_INTERVAL_MINUTES") or cfg.get("check_interval_minutes", 3)) * 60
+
+    logger.info(f"📋 Configuração Ativa: chat_id={chat_id} | app_key={app_key[:6]}... | interval={interval//60}min")
 
     if not app_key or not secret:
-        logger.error("❌ SHOPEE_APP_KEY ou SHOPEE_SECRET_KEY não configurados! Encerrando.")
-        return
+        logger.error("❌ SHOPEE_APP_KEY ou SHOPEE_SECRET_KEY ausentes!")
+        sys.exit(1)
 
     if not bot_token or not chat_id:
-        logger.error("❌ TELEGRAM_BOT_TOKEN ou TELEGRAM_CHAT_ID não configurados! Encerrando.")
-        return
+        logger.error("❌ TELEGRAM_BOT_TOKEN ou TELEGRAM_CHAT_ID ausentes!")
+        sys.exit(1)
 
     shopee_api = ShopeeAffiliateAPI(app_key, secret)
     posted_items = set()
@@ -257,11 +266,11 @@ def main():
                         count += 1
                         time.sleep(5)  # Respeita rate limit do Telegram
 
-                logger.info(f"✨ {count} novas ofertas publicadas nesta rodada")
+                logger.info(f"✨ {count} novas ofertas processadas nesta rodada")
                 page = (page % 5) + 1
             else:
                 logger.warning("⚠️ Nenhuma oferta retornada da Shopee nesta rodada")
-                page = 1  # Reseta página em caso de falha
+                page = 1
 
         except Exception as e:
             logger.error(f"Erro no ciclo principal: {e}", exc_info=True)

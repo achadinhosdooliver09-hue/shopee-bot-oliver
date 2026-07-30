@@ -1,4 +1,0 @@
-2026-07-29 13:33:49,778 - [ERROR] - Falha de conexão Telegram: HTTPSConnectionPool(host='api.telegram.org', port=443): Read timed out. (read timeout=12)
-2026-07-29 13:34:49,088 - [ERROR] - Falha de conexão Telegram (Tentativa 1): HTTPSConnectionPool(host='api.telegram.org', port=443): Read timed out. (read timeout=25)
-2026-07-29 13:35:16,665 - [ERROR] - Falha de conexão Telegram (Tentativa 2): HTTPSConnectionPool(host='api.telegram.org', port=443): Read timed out. (read timeout=25)
-2026-07-29 13:35:44,402 - [ERROR] - Falha de conexão Telegram (Tentativa 3): HTTPSConnectionPool(host='api.telegram.org', port=443): Read timed out. (read timeout=25)
