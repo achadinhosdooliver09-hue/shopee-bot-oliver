@@ -2,9 +2,11 @@ import os
 import sys
 import time
 import json
+import html
 import hashlib
 import logging
 import threading
+from collections import deque
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -34,20 +36,17 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"OK - Achadinhos do Oliver Bot Active")
 
     def log_message(self, format, *args):
-        pass  # Silencia logs HTTP ruidosos
+        pass
 
 
 def start_http_server():
-    """Inicia o servidor HTTP de health check na porta definida pelo Render."""
     port = int(os.environ.get("PORT", 10000))
     try:
         server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
         logger.info(f"✅ Servidor HTTP de Health Check ativo na porta {port}")
         server.serve_forever()
-    except OSError as e:
-        logger.error(f"❌ Erro ao iniciar servidor HTTP na porta {port}: {e}")
     except Exception as e:
-        logger.error(f"❌ Servidor HTTP encerrado: {e}")
+        logger.error(f"❌ Erro no servidor HTTP: {e}")
 
 
 # ─── Config ──────────────────────────────────────────────────────────────────
@@ -114,10 +113,8 @@ class ShopeeAffiliateAPI:
                 return nodes
             else:
                 logger.error(f"Shopee API status {res.status_code}: {res.text[:300]}")
-        except requests.exceptions.Timeout:
-            logger.error("Shopee API: timeout na requisição")
         except Exception as e:
-            logger.error(f"Shopee API: erro inesperado — {e}")
+            logger.error(f"Shopee API erro: {e}")
         return []
 
     def generate_affiliate_link(self, origin_url):
@@ -137,19 +134,20 @@ class ShopeeAffiliateAPI:
                 short = res.json().get("data", {}).get("generateShortLink", {}).get("shortLink")
                 if short:
                     return short
-                logger.warning(f"generateShortLink sem retorno: {res.text[:200]}")
-        except requests.exceptions.Timeout:
-            logger.error("Timeout ao gerar link de afiliado")
         except Exception as e:
             logger.error(f"Erro ao gerar link de afiliado: {e}")
         return origin_url
 
 
 # ─── Telegram ────────────────────────────────────────────────────────────────
-def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_url, shopee_api):
+def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_url, shopee_api, fallback_chat_id="@achadinhosdooliver"):
     if not bot_token or not chat_id:
         logger.warning("Telegram: bot_token ou chat_id ausentes")
         return False
+
+    # Garante URL completa da imagem
+    if image_url.startswith("//"):
+        image_url = "https:" + image_url
 
     affiliate_link = shopee_api.generate_affiliate_link(raw_offer_link)
 
@@ -158,9 +156,12 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
     except (ValueError, TypeError):
         price_fmt = f"R$ {price}"
 
+    # ESCAPE DE HTML para evitar erro 400 do Telegram
+    title_escaped = html.escape(title)
+
     caption = (
         f"🔥 <b>ACHADINHO IMPERDÍVEL NA SHOPEE!</b>\n\n"
-        f"📦 <b>{title}</b>\n\n"
+        f"📦 <b>{title_escaped}</b>\n\n"
         f"💰 <b>Preço de Oferta:</b> {price_fmt}\n\n"
         f"👉 <a href='{affiliate_link}'><b>CLIQUE AQUI PARA COMPRAR NA SHOPEE</b></a>\n\n"
         f"⚡ <i>Garanta o seu com desconto antes que acabe!</i>"
@@ -173,38 +174,43 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
     }
 
     url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
-    payload = {
-        "chat_id": chat_id,
-        "photo": image_url,
-        "caption": caption,
-        "parse_mode": "HTML",
-        "reply_markup": json.dumps(reply_markup),
-    }
-
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
 
-    for attempt in range(1, 4):
-        try:
-            res = requests.post(url, data=payload, headers=headers, timeout=30)
-            if res.status_code == 200:
-                logger.info(f"✅ Publicado com sucesso no Telegram: {title[:40]} | {affiliate_link}")
-                return True
-            else:
-                resp_json = res.json()
-                logger.error(
-                    f"Telegram erro (tentativa {attempt}): "
-                    f"code={res.status_code} desc={resp_json.get('description', res.text[:200])}"
-                )
-                if resp_json.get("error_code") in (400, 403):
-                    logger.error("❌ Erro permanente Telegram (chat_id ou bot inválido) — abortando tentativas")
-                    break
-        except requests.exceptions.Timeout:
-            logger.error(f"Telegram: timeout (tentativa {attempt})")
-        except Exception as e:
-            logger.error(f"Telegram: erro inesperado (tentativa {attempt}) — {e}")
-        time.sleep(3)
+    # Tenta o ID primario (ex: -1004304433240) e o fallback (@achadinhosdooliver) se necessario
+    target_chats = [chat_id]
+    if fallback_chat_id and fallback_chat_id != chat_id:
+        target_chats.append(fallback_chat_id)
+
+    for target in target_chats:
+        payload = {
+            "chat_id": target,
+            "photo": image_url,
+            "caption": caption,
+            "parse_mode": "HTML",
+            "reply_markup": json.dumps(reply_markup),
+        }
+
+        for attempt in range(1, 4):
+            try:
+                res = requests.post(url, data=payload, headers=headers, timeout=30)
+                if res.status_code == 200:
+                    logger.info(f"✅ Publicado no Telegram ({target}): {title[:35]}... | {affiliate_link}")
+                    return True
+                else:
+                    resp_json = res.json()
+                    desc = resp_json.get("description", res.text[:200])
+                    err_code = resp_json.get("error_code")
+                    logger.error(
+                        f"Telegram erro destino '{target}' (tentativa {attempt}): "
+                        f"code={res.status_code} desc={desc}"
+                    )
+                    if err_code in (400, 403, 404):
+                        break
+            except Exception as e:
+                logger.error(f"Telegram erro inesperado (tentativa {attempt}) — {e}")
+            time.sleep(2)
 
     return False
 
@@ -213,31 +219,29 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
 def main():
     logger.info("🚀 Iniciando Robô Varredor Shopee 24/7 — Achadinhos do Oliver")
 
-    # Inicia o servidor HTTP em background (daemon thread para nao travar encerramento)
     http_thread = threading.Thread(target=start_http_server, name="HTTPServer", daemon=True)
     http_thread.start()
 
     cfg = load_config()
 
-    # Prioridade: Variaveis de ambiente do Render -> Fallback para config.json
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN") or cfg.get("telegram_bot_token", "")
     chat_id   = os.environ.get("TELEGRAM_CHAT_ID") or cfg.get("telegram_chat_id", "")
     app_key   = os.environ.get("SHOPEE_APP_KEY") or cfg.get("shopee_app_key", "")
     secret    = os.environ.get("SHOPEE_SECRET_KEY") or cfg.get("shopee_secret_key", "")
     interval  = int(os.environ.get("CHECK_INTERVAL_MINUTES") or cfg.get("check_interval_minutes", 3)) * 60
 
-    logger.info(f"📋 Configuração Ativa: chat_id={chat_id} | app_key={app_key[:6]}... | interval={interval//60}min")
+    logger.info(f"📋 Config Ativa: chat_id={chat_id} | app_key={app_key[:6]}... | interval={interval//60}min")
 
-    if not app_key or not secret:
-        logger.error("❌ SHOPEE_APP_KEY ou SHOPEE_SECRET_KEY ausentes!")
-        sys.exit(1)
-
-    if not bot_token or not chat_id:
-        logger.error("❌ TELEGRAM_BOT_TOKEN ou TELEGRAM_CHAT_ID ausentes!")
+    if not app_key or not secret or not bot_token or not chat_id:
+        logger.error("❌ Credenciais incompletas! Encerrando com erro.")
         sys.exit(1)
 
     shopee_api = ShopeeAffiliateAPI(app_key, secret)
+
+    # Fila circular de 200 itens para permitir reciclagem e nao travar no set infinito
+    posted_queue = deque(maxlen=200)
     posted_items = set()
+
     page = 1
 
     while True:
@@ -258,15 +262,15 @@ def main():
                     image      = item.get("imageUrl", "")
 
                     if not offer_link or not image:
-                        logger.warning(f"Item {item_id} sem link/imagem, pulando")
                         continue
 
                     if send_telegram_deal(bot_token, chat_id, title, price, offer_link, image, shopee_api):
-                        posted_items.add(item_id)
+                        posted_queue.append(item_id)
+                        posted_items = set(posted_queue)
                         count += 1
-                        time.sleep(5)  # Respeita rate limit do Telegram
+                        time.sleep(5)  # Delay para respeitar rate limit do Telegram
 
-                logger.info(f"✨ {count} novas ofertas processadas nesta rodada")
+                logger.info(f"✨ {count} novas ofertas enviadas nesta rodada")
                 page = (page % 5) + 1
             else:
                 logger.warning("⚠️ Nenhuma oferta retornada da Shopee nesta rodada")
