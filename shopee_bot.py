@@ -179,10 +179,11 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
 
-    # Tenta o ID primario e o fallback (@achadinhosdooliver) se necessario
-    target_chats = [chat_id]
-    if fallback_chat_id and fallback_chat_id not in target_chats:
-        target_chats.append(fallback_chat_id)
+    # Tenta todos os destinos possiveis (Grupo Privado, Supergrupo e Canal)
+    target_chats = []
+    for c in [chat_id, "-1005441414676", "-5441414676", "-1004304433240", "@achadinhosdooliver"]:
+        if c and c not in target_chats:
+            target_chats.append(c)
 
     for target in target_chats:
         payload = {
@@ -197,16 +198,14 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
             try:
                 res = requests.post(url, data=payload, headers=headers, timeout=30)
                 if res.status_code == 200:
-                    logger.info(f"✅ Publicado no Telegram ({target}): {title[:35]}... | {affiliate_link}")
+                    logger.info(f"✅ Publicado com sucesso no Telegram ({target}): {title[:35]}... | {affiliate_link}")
                     return True
                 else:
                     resp_json = res.json()
                     desc = resp_json.get("description", res.text[:200])
                     err_code = resp_json.get("error_code")
-                    logger.warning(
-                        f"Telegram tentativa no destino '{target}' ({attempt}/3): "
-                        f"code={res.status_code} desc={desc}"
-                    )
+                    if err_code not in (400, 403, 404):
+                        logger.warning(f"Telegram tentativa destino '{target}' ({attempt}/3): code={res.status_code} desc={desc}")
                     if err_code in (400, 403, 404):
                         break
             except Exception as e:
