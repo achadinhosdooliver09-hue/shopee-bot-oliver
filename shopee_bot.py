@@ -158,12 +158,13 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
 
     # ESCAPE DE HTML para evitar erro 400 do Telegram
     title_escaped = html.escape(title)
+    affiliate_link_escaped = html.escape(affiliate_link, quote=True)
 
     caption = (
         f"🔥 <b>ACHADINHO IMPERDÍVEL NA SHOPEE!</b>\n\n"
         f"📦 <b>{title_escaped}</b>\n\n"
         f"💰 <b>Preço de Oferta:</b> {price_fmt}\n\n"
-        f"👉 <a href='{affiliate_link}'><b>CLIQUE AQUI PARA COMPRAR NA SHOPEE</b></a>\n\n"
+        f"👉 <a href=\"{affiliate_link_escaped}\"><b>CLIQUE AQUI PARA COMPRAR NA SHOPEE</b></a>\n\n"
         f"⚡ <i>Garanta o seu com desconto antes que acabe!</i>"
     )
 
