@@ -109,7 +109,7 @@ class ShopeeAffiliateAPI:
                 data = res.json()
                 nodes = data.get("data", {}).get("productOfferV2", {}).get("nodes", [])
                 if not nodes:
-                    logger.warning(f"Shopee retornou lista vazia. Resposta: {data}")
+                    logger.warning(f"Shopee retornou lista vazia na página {page}. Resposta: {data}")
                 return nodes
             else:
                 logger.error(f"Shopee API status {res.status_code}: {res.text[:300]}")
@@ -145,7 +145,6 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
         logger.warning("Telegram: bot_token ou chat_id ausentes")
         return False
 
-    # Garante URL completa da imagem
     if image_url.startswith("//"):
         image_url = "https:" + image_url
 
@@ -156,7 +155,6 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
     except (ValueError, TypeError):
         price_fmt = f"R$ {price}"
 
-    # ESCAPE DE HTML para evitar erro 400 do Telegram
     title_escaped = html.escape(title)
     affiliate_link_escaped = html.escape(affiliate_link, quote=True)
 
@@ -179,7 +177,6 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
 
-    # Tenta todos os destinos possiveis (Grupo Privado, Supergrupo e Canal)
     target_chats = []
     for c in [chat_id, "-1005441414676", "-5441414676", "-1004304433240", "@achadinhosdooliver"]:
         if c and c not in target_chats:
@@ -238,22 +235,25 @@ def main():
 
     shopee_api = ShopeeAffiliateAPI(app_key, secret)
 
-    # Fila circular de 200 itens para permitir reciclagem e nao travar no set infinito
+    # Fila circular de 200 itens para evitar duplicados e permitir rotacao
     posted_queue = deque(maxlen=200)
     posted_items = set()
 
     page = 1
+    MAX_PAGES = 20  # Varre ate 20 paginas (200 ofertas) da Shopee
 
     while True:
         try:
-            logger.info(f"🔎 Varrendo Shopee — página {page}...")
+            logger.info(f"🔎 Varrendo Shopee — página {page}/{MAX_PAGES}...")
             offers = shopee_api.fetch_top_offers(page=page, limit=10)
 
             if offers:
                 count = 0
+                skipped = 0
                 for item in offers:
                     item_id = item.get("itemId")
                     if not item_id or item_id in posted_items:
+                        skipped += 1
                         continue
 
                     title      = item.get("productName", "Produto Shopee")
@@ -270,17 +270,25 @@ def main():
                         count += 1
                         time.sleep(5)  # Delay para respeitar rate limit do Telegram
 
-                logger.info(f"✨ {count} novas ofertas enviadas nesta rodada")
-                page = (page % 5) + 1
+                if count > 0:
+                    logger.info(f"✨ {count} novas ofertas enviadas! ({skipped} já enviadas anteriormente)")
+                    # Aguarda o intervalo padrao (ex: 3 minutos) quando novas ofertas sao enviadas
+                    time_to_sleep = interval
+                else:
+                    logger.info(f"ℹ️ Todas as 10 ofertas da página {page} já foram postadas. Avançando para próxima página em 5s...")
+                    time_to_sleep = 5  # Avanca rapidamente se a pagina atual ja foi processada!
+
+                page = (page % MAX_PAGES) + 1
             else:
-                logger.warning("⚠️ Nenhuma oferta retornada da Shopee nesta rodada")
+                logger.warning(f"⚠️ Nenhuma oferta retornada da Shopee na página {page}. Voltando para página 1...")
                 page = 1
+                time_to_sleep = interval
 
         except Exception as e:
             logger.error(f"Erro no ciclo principal: {e}", exc_info=True)
+            time_to_sleep = interval
 
-        logger.info(f"💤 Aguardando {interval // 60} minutos para a próxima varredura...")
-        time.sleep(interval)
+        time.sleep(time_to_sleep)
 
 
 if __name__ == "__main__":
