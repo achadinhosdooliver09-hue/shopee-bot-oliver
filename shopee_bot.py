@@ -179,9 +179,9 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
 
-    # Tenta o ID primario (ex: -1004304433240) e o fallback (@achadinhosdooliver) se necessario
+    # Tenta o ID primario e o fallback (@achadinhosdooliver) se necessario
     target_chats = [chat_id]
-    if fallback_chat_id and fallback_chat_id != chat_id:
+    if fallback_chat_id and fallback_chat_id not in target_chats:
         target_chats.append(fallback_chat_id)
 
     for target in target_chats:
@@ -203,8 +203,8 @@ def send_telegram_deal(bot_token, chat_id, title, price, raw_offer_link, image_u
                     resp_json = res.json()
                     desc = resp_json.get("description", res.text[:200])
                     err_code = resp_json.get("error_code")
-                    logger.error(
-                        f"Telegram erro destino '{target}' (tentativa {attempt}): "
+                    logger.warning(
+                        f"Telegram tentativa no destino '{target}' ({attempt}/3): "
                         f"code={res.status_code} desc={desc}"
                     )
                     if err_code in (400, 403, 404):
